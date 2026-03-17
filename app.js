@@ -5,10 +5,12 @@ const tasksBody = document.getElementById("tasksBody");
 const downloadBtn = document.getElementById("downloadCsv");
 const mappingCard = document.getElementById("mappingCard");
 const mappingRowsEl = document.getElementById("mappingRows");
+const qaAsMinutesCheckbox = document.getElementById("qaAsMinutes");
 
 let currentTasks = [];
 let currentBaseName = "tasks";
 let assigneeMap = {};
+let qaAsMinutes = true;
 
 fileInput.addEventListener("change", handleFileChange);
 downloadBtn.addEventListener("click", () => {
@@ -23,6 +25,12 @@ downloadBtn.addEventListener("click", () => {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+});
+
+qaAsMinutesCheckbox.addEventListener("change", () => {
+  qaAsMinutes = qaAsMinutesCheckbox.checked;
+  // re-render table, CSV export will automatically respect new mode
+  renderTasks(currentTasks);
 });
 
 function handleFileChange(event) {
@@ -327,7 +335,11 @@ function renderTasks(tasks) {
 
     const qaTd = document.createElement("td");
     qaTd.className = "small";
-    qaTd.textContent = task.qaEstimate || "";
+    if (qaAsMinutes && task.qaEstimate) {
+      qaTd.textContent = qaToMinutes(task.qaEstimate) || task.qaEstimate;
+    } else {
+      qaTd.textContent = task.qaEstimate || "";
+    }
     tr.appendChild(qaTd);
 
     const assigneeTd = document.createElement("td");
@@ -434,17 +446,48 @@ function tasksToCsv(tasks) {
     const key = normalizeAssigneeKey(rawAssignee);
     const mappedAssignee =
       (key && assigneeMap[key]) || rawAssignee;
+    const qaValue =
+      qaAsMinutes && t.qaEstimate
+        ? qaToMinutes(t.qaEstimate) || t.qaEstimate
+        : t.qaEstimate;
+
     const row = [
       escapeCsvCell(t.summary),
       escapeCsvCell(t.description),
       escapeCsvCell("Task"),
       escapeCsvCell(t.originalEstimate),
-      escapeCsvCell(t.qaEstimate),
+      escapeCsvCell(qaValue),
       escapeCsvCell(mappedAssignee),
     ];
     lines.push(row.join(","));
   }
   return lines.join("\n");
+}
+
+// Reuse the same parsing logic as the Python script to convert "1h", "45m",
+// "2.5h" etc. to integer minutes.
+function qaToMinutes(value) {
+  if (!value) return "";
+  const text = String(value).trim().toLowerCase();
+  let minutes = 0;
+
+  try {
+    if (text.endsWith("h")) {
+      const hours = parseFloat(text.slice(0, -1));
+      minutes = hours * 60;
+    } else if (text.endsWith("m")) {
+      minutes = parseFloat(text.slice(0, -1));
+    } else {
+      // assume plain number is hours
+      const hours = parseFloat(text);
+      minutes = hours * 60;
+    }
+  } catch (e) {
+    return "";
+  }
+
+  if (!isFinite(minutes)) return "";
+  return String(Math.round(minutes));
 }
 
 // --- Description HTML rendering for dashboard ---
