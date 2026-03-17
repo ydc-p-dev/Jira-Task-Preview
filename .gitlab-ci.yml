@@ -7,9 +7,9 @@ pages:
   stage: deploy
   script:
     # GitLab Pages serves the contents of the public/ directory.
-    # Treat the repository root as the site root.
+    # Treat the repository root as the site root, but avoid copying public into itself.
     - mkdir -p public
-    - cp -r * public/
+    - find . -mindepth 1 -maxdepth 1 ! -name public -exec cp -r {} public/ \;
   artifacts:
     paths:
       - public
