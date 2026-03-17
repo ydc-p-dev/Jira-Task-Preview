@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Task Preview from HTML</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <div>
+        <div class="title">
+          <span>HTML → Jira Tasks Preview</span>
+          <span class="title-pill">Client‑side only</span>
+        </div>
+        <div class="subtitle">
+          Upload your milestone HTML export and preview the parsed Jira tasks
+          (summary, description, estimates, assignee) directly in your browser.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="upload-row">
+        <label class="file-input-label">
+          <span class="icon">⇪</span>
+          <span>Select HTML file…</span>
+          <input id="fileInput" type="file" accept=".html,.htm,text/html" />
+        </label>
+        <button id="downloadCsv" type="button" class="file-input-label" style="opacity:0.7; cursor:not-allowed;">
+          <span class="icon">↓</span>
+          <span>Download CSV</span>
+        </button>
+        <div class="hint">
+          Expects a table with columns like <strong>Expert</strong>, <strong>Task Description</strong>,
+          <strong>Est. hours: Time</strong>, <strong>QA</strong>, just like your template.
+        </div>
+      </div>
+      <div id="error" class="error" style="display:none;"></div>
+      <div class="stats" id="stats" style="display:none;"></div>
+    </div>
+
+    <div class="card" id="mappingCard" style="display:none;">
+      <div class="mapping-card">
+        <span style="font-size:11px; text-transform:uppercase; letter-spacing:0.12em; color:var(--text-muted);">
+          Assignee mapping
+        </span>
+        <div id="mappingRows"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Summary</th>
+              <th>Description</th>
+              <th>Original</th>
+              <th>QA</th>
+              <th>Assignee</th>
+            </tr>
+          </thead>
+          <tbody id="tasksBody">
+            <tr>
+              <td colspan="6" style="padding: 14px; text-align: center; color: var(--text-muted);">
+                No tasks yet. Upload an HTML file above.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
+
