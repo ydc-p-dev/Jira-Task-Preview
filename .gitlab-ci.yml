@@ -1,0 +1,17 @@
+image: alpine:latest
+
+stages:
+  - deploy
+
+pages:
+  stage: deploy
+  script:
+    # GitLab Pages serves the contents of the public/ directory.
+    # Treat the repository root as the site root.
+    - mkdir -p public
+    - cp -r * public/
+  artifacts:
+    paths:
+      - public
+  only:
+    - main
