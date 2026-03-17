@@ -65,6 +65,13 @@ function handleFileChange(event) {
   reader.readAsText(file);
 }
 
+function normalizeAssigneeKey(value) {
+  // Trim and remove zero-width / non-breaking spaces so "FS1" variants collapse.
+  return String(value || "")
+    .replace(/[\u200B-\u200F\uFEFF\u00A0]/g, "")
+    .trim();
+}
+
 // --- Parsing logic (JS version of your Python script) ---
 
 function renderInline(node) {
@@ -86,14 +93,22 @@ function renderInline(node) {
 }
 
 function parseList(listEl, level = 1, ordered = false) {
-  const prefix = ordered ? "#".repeat(level) : "*".repeat(level);
   const lines = [];
   const items = Array.from(listEl.children).filter(
     (c) => c.tagName && c.tagName.toLowerCase() === "li",
   );
   for (const li of items) {
-    const text = renderInline(li).trim();
+    let text = renderInline(li).trim();
     if (text) {
+      let effectiveLevel = level;
+      // Heuristic: if we are in a numbered list and the item itself
+      // starts with "a. ", "b. ", etc., treat it as a nested level.
+      const alphaMatch = text.match(/^([a-z])\.\s+(.*)$/i);
+      if (ordered && level === 1 && alphaMatch) {
+        effectiveLevel = level + 1;
+        text = alphaMatch[2].trim();
+      }
+      const prefix = ordered ? "#".repeat(effectiveLevel) : "*".repeat(effectiveLevel);
       lines.push(prefix + " " + text);
     }
     // nested lists
@@ -111,22 +126,73 @@ function parseList(listEl, level = 1, ordered = false) {
 
 function parseDescription(cell) {
   const parts = [];
+  let lastWasNumberedList = false;
   for (const child of cell.childNodes) {
     if (child.nodeType === Node.ELEMENT_NODE) {
       const tag = child.tagName.toLowerCase();
       if (tag === "p") {
-        const text = renderInline(child).trim();
-        if (text) parts.push(text);
+        const raw = renderInline(child).trim();
+        if (raw) {
+          // If this paragraph immediately follows a numbered list and starts
+          // with an alphabetic marker like "a. ", "b. ", treat it as a
+          // second‑level ordered list item → "## item".
+          const alphaMatch = raw.match(/^([a-z])\.\s+(.*)$/i);
+          if (lastWasNumberedList && alphaMatch) {
+            const itemText = alphaMatch[2].trim();
+            parts.push(`## ${itemText}`);
+            // still considered part of the numbered list
+            lastWasNumberedList = true;
+          } else {
+            if (lastWasNumberedList && parts.length) {
+              // add blank line between numbered list and following text
+              parts.push("");
+            }
+            parts.push(raw);
+            lastWasNumberedList = false;
+          }
+        } else {
+          lastWasNumberedList = false;
+        }
       } else if (tag === "ol") {
         parts.push(...parseList(child, 1, true));
+        lastWasNumberedList = true;
       } else if (tag === "ul") {
         parts.push(...parseList(child, 1, false));
+        lastWasNumberedList = false;
       }
     } else if (child.nodeType === Node.TEXT_NODE) {
       const text = (child.nodeValue || "").trim();
-      if (text) parts.push(text);
+      if (text) {
+        if (lastWasNumberedList && parts.length) {
+          parts.push("");
+        }
+        parts.push(text);
+      }
+      lastWasNumberedList = false;
     }
   }
+  // Post-process: for any list heading that ends with a colon (like
+  // "# Actions:" or "## If validation passes:"), make all contiguous
+  // following list items one level deeper (parentLevel + 1).
+  for (let i = 0; i < parts.length; i++) {
+    const heading = parts[i];
+    const m = heading.match(/^(#{1,6})\s+.*:\s*$/);
+    if (!m) continue;
+    const parentHashes = m[1];
+    const parentLevel = parentHashes.length;
+
+    for (let j = i + 1; j < parts.length; j++) {
+      const line = parts[j];
+      if (/^\s*$/.test(line)) break;
+      const lm = line.match(/^(#{1,6})(\s+)(.*)$/);
+      if (!lm) break;
+
+      const desiredLevel = parentLevel + 1;
+      const newHashes = "#".repeat(desiredLevel);
+      parts[j] = `${newHashes}${lm[2]}${lm[3]}`;
+    }
+  }
+
   return parts.join("\n");
 }
 
@@ -188,17 +254,24 @@ function parseTasksFromHtml(htmlText) {
       }
 
       const fullDesc = parseDescription(descriptionCell);
-      const lines = fullDesc
-        .split("\n")
+      const rawLines = fullDesc.split("\n");
+      const trimmedNonEmpty = rawLines
         .map((l) => l.trim())
         .filter(Boolean);
-      if (!lines.length) continue;
+      if (!trimmedNonEmpty.length) continue;
 
-      let summary = lines[0];
+      // first non-empty trimmed line becomes summary
+      let summary = trimmedNonEmpty[0];
+
+      // keep original structure (including blank lines) for description
+      let summaryIndex = rawLines.findIndex((l) => l.trim() === summary);
+      if (summaryIndex === -1) summaryIndex = 0;
+      const descriptionLines = rawLines.slice(summaryIndex + 1);
+      const description = descriptionLines.join("\n").replace(/\s+$/u, "");
+
       if (currentSection) {
         summary = currentSection + ". " + summary;
       }
-      const description = lines.slice(1).join("\n");
 
       tasks.push({
         summary: summary.trim(),
@@ -244,7 +317,7 @@ function renderTasks(tasks) {
 
     const descTd = document.createElement("td");
     descTd.className = "description";
-    descTd.textContent = task.description;
+    descTd.innerHTML = renderDescriptionHtml(task.description);
     tr.appendChild(descTd);
 
     const origTd = document.createElement("td");
@@ -284,7 +357,7 @@ function renderStats(tasks, filename) {
 function buildInitialAssigneeMap(tasks) {
   const map = {};
   for (const t of tasks) {
-    const key = (t.assignee || "").trim();
+    const key = normalizeAssigneeKey(t.assignee);
     if (!key) continue;
     if (!(key in map)) {
       map[key] = key; // default mapping: identity
@@ -357,9 +430,10 @@ function tasksToCsv(tasks) {
   const lines = [];
   lines.push(headers.join(","));
   for (const t of tasks) {
-    const rawAssignee = (t.assignee || "").trim();
+    const rawAssignee = t.assignee || "";
+    const key = normalizeAssigneeKey(rawAssignee);
     const mappedAssignee =
-      (rawAssignee && assigneeMap[rawAssignee]) || rawAssignee;
+      (key && assigneeMap[key]) || rawAssignee;
     const row = [
       escapeCsvCell(t.summary),
       escapeCsvCell(t.description),
@@ -372,4 +446,79 @@ function tasksToCsv(tasks) {
   }
   return lines.join("\n");
 }
+
+// --- Description HTML rendering for dashboard ---
+
+function renderDescriptionHtml(text) {
+  if (!text) return "";
+  const lines = String(text).split("\n");
+
+  const root = document.createElement("div");
+  const stack = []; // array of { el, level, type }
+
+  function closeToLevel(level) {
+    while (stack.length > level) stack.pop();
+  }
+
+  function appendParagraph(line) {
+    closeToLevel(0);
+    const p = document.createElement("p");
+    p.textContent = line;
+    root.appendChild(p);
+  }
+
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/u, "");
+    if (!line.trim()) {
+      // blank line → paragraph break
+      closeToLevel(0);
+      continue;
+    }
+
+    const m = line.match(/^([#*]+)\s+(.*)$/);
+    if (!m) {
+      appendParagraph(line);
+      continue;
+    }
+
+    const markers = m[1];
+    const content = m[2];
+    const level = markers.length;
+    const isOrdered = markers[0] === "#";
+
+    // ensure stack has containers up to this level
+    closeToLevel(level);
+
+    while (stack.length < level) {
+      const curLevel = stack.length + 1;
+      const parent = stack[stack.length - 1];
+      const listEl = document.createElement(isOrdered ? "ol" : "ul");
+      listEl.style.margin = "0 0 0.25em 1.4em";
+      listEl.style.paddingLeft = "1.2em";
+
+      if (!parent) {
+        root.appendChild(listEl);
+      } else {
+        // nested list goes inside last li of parent
+        let lastLi = parent.el.lastElementChild;
+        if (!lastLi) {
+          lastLi = document.createElement("li");
+          parent.el.appendChild(lastLi);
+        }
+        lastLi.appendChild(listEl);
+      }
+
+      stack.push({ el: listEl, level: curLevel, type: isOrdered ? "ol" : "ul" });
+    }
+
+    const currentList = stack[stack.length - 1].el;
+
+    const li = document.createElement("li");
+    li.textContent = content;
+    currentList.appendChild(li);
+  }
+
+  return root.innerHTML;
+}
+
 
